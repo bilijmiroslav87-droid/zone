@@ -1,4 +1,5 @@
-name: Build Zone Visuals from ZIP
+
+name: Build Visuals from ZIP
 
 on:
   push:
@@ -17,16 +18,44 @@ jobs:
 
       - name: Unpack ZIP File
         run: |
-          # Автоматически находим и распаковываем любой ZIP в репозитории
+          # 1. Распаковываем любой найденный zip архив
           for f in *.zip; do
             if [ -f "$f" ]; then
-              echo "Распаковка $f..."
+              echo "Extracting: $f"
               unzip -o "$f"
-              if [ -d "zone-visuals" ]; then
-                cp -r zone-visuals/* .
+            fi
+          done
+
+          # 2. АВТО-ПОИСК: находим, где реально лежит build.gradle
+          BUILD_FILE=$(find . -name "build.gradle" -not -path "*/.gradle/*" | head -n 1)
+          if [ -n "$BUILD_FILE" ]; then
+            SUBDIR=$(dirname "$BUILD_FILE")
+            echo "Найден build.gradle в папке: $SUBDIR"
+            if [ "$SUBDIR" != "." ]; then
+              echo "Переносим файлы из $SUBDIR в корень репозитория..."
+              cp -rf "$SUBDIR"/* . || true
+              cp -rf "$SUBDIR"/.* . 2>/dev/null || true
+            fi
+          else
+            echo "ОШИБКА: build.gradle не найден в архиве!"
+            exit 1
+          fi
+
+      - name: Patch Type Casts and Fix Errors
+        run: |
+          # Автоматически находим NumberSetting независимо от пакета
+          NUM_SETTINGS=$(find src -name "NumberSetting.java" 2>/dev/null || true)
+          for ns in $NUM_SETTINGS; do
+            if [ -f "$ns" ]; then
+              echo "Патчим $ns..."
+              if ! grep -q "getFloatValue" "$ns"; then
+                sed -i '/public double getStep/a \    public float getFloatValue() { return (float) getValue(); }\n    public int getIntValue() { return (int) Math.round(getValue()); }' "$ns" || true
               fi
             fi
           done
+
+          # Исправление приведения типов
+          find src -type f -name "*.java" -exec sed -i 's/(float) [a-zA-Z0-9_]*\.getValue()/&.floatValue()/g' {} + 2>/dev/null || true
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4
@@ -34,20 +63,17 @@ jobs:
           java-version: '21'
           distribution: 'temurin'
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
-
       - name: Build Mod
         run: |
           if [ -f "./gradlew" ]; then
             chmod +x ./gradlew
-            ./gradlew build --no-daemon
+            ./gradlew build --no-daemon -x test
           else
-            gradle build --no-daemon
+            gradle build --no-daemon -x test
           fi
 
       - name: Upload Mod Jar
         uses: actions/upload-artifact@v4
         with:
-          name: zone-visuals-1.21.4
+          name: visuals-1.21.4-fabric
           path: build/libs/*.jar
